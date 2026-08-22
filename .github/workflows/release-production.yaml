@@ -15,8 +15,7 @@ concurrency:
 
 env:
   AWS_REGION: ap-northeast-1
-  PROJECT_NAME: codebuild-test
-  ENVIRONMENT_NAME: production
+  ECR_REPOSITORY_NAME: tests/codebuild-test
   ECS_CLUSTER: test-cluster
   ECS_SERVICE: test-service
   CONTAINER_NAME: application
@@ -55,7 +54,7 @@ jobs:
           REGISTRY: ${{ steps.ecr-login.outputs.registry }}
         run: |
           set -euo pipefail
-          REPOSITORY="${PROJECT_NAME}-${ENVIRONMENT_NAME}-app"
+          REPOSITORY="${ECR_REPOSITORY_NAME}"
           VERSION_IMAGE="${REGISTRY}/${REPOSITORY}:${GITHUB_REF_NAME}"
           SHA_IMAGE="${REGISTRY}/${REPOSITORY}:sha-${GITHUB_SHA}"
           docker build -t "$VERSION_IMAGE" -t "$SHA_IMAGE" .
@@ -96,7 +95,7 @@ jobs:
           aws ecs update-service \
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE" \
-            --task-definition '${{ steps.td.outputs.arn }}'
+            --task-definition '${{ steps.task-definition.outputs.arn }}'
           aws ecs wait services-stable \
             --cluster "$ECS_CLUSTER" \
             --service "$ECS_SERVICE"          
