@@ -1,0 +1,102 @@
+name: Release production
+
+on:
+  push:
+    tags:
+      - 'github-actions-release'
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-deployment
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-1
+  PROJECT_NAME: codebuild-test
+  ENVIRONMENT_NAME: production
+  ECS_CLUSTER: test-cluster
+  ECS_SERVICE: test-service
+  CONTAINER_NAME: application
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Verify tag belongs to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          [[ "${GITHUB_REF_NAME}" =~ ^github-actions-release$ ]]
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Sign in to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Build and push image
+        id: image
+        shell: bash
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          set -euo pipefail
+          REPOSITORY="${PROJECT_NAME}-${ENVIRONMENT_NAME}-app"
+          VERSION_IMAGE="${REGISTRY}/${REPOSITORY}:${GITHUB_REF_NAME}"
+          SHA_IMAGE="${REGISTRY}/${REPOSITORY}:sha-${GITHUB_SHA}"
+          docker build -t "$VERSION_IMAGE" -t "$SHA_IMAGE" .
+          docker push "$VERSION_IMAGE"
+          docker push "$SHA_IMAGE"
+          DIGEST="$(aws ecr describe-images \
+            --repository-name "$REPOSITORY" \
+            --image-ids imageTag="$GITHUB_REF_NAME" \
+            --query 'imageDetails[0].imageDigest' --output text)"
+          echo "uri=${REGISTRY}/${REPOSITORY}@${DIGEST}" >> "$GITHUB_OUTPUT"
+      
+      - name: Render and register task definition
+        id: task-definition
+        shell: bash
+        env:
+          IMAGE_URI: ${{ steps.image.outputs.uri }}
+        run: |
+          set -euo pipefail
+          CURRENT_TD="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].taskDefinition' --output text)"
+          aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TD" \
+            --query taskDefinition > task-definition.json
+          jq --arg image "$IMAGE_URI" --arg container "$CONTAINER_NAME" '
+            del(.taskDefinitionArn,.revision,.status,.requiresAttributes,.compatibilities,.registeredAt,.registeredBy)
+            | .containerDefinitions |= map(if .name == $container then .image = $image else . end)
+          ' task-definition.json > task-definition-next.json
+          NEW_TD="$(aws ecs register-task-definition \
+            --cli-input-json file://task-definition-next.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)"
+          echo "arn=$NEW_TD" >> "$GITHUB_OUTPUT"
+      
+      - name: Deploy ECS service
+        shell: bash
+        run: |
+          set -euo pipefail
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition '${{ steps.td.outputs.arn }}'
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE"          

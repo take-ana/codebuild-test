@@ -1,0 +1,12 @@
+{
+  "name": "codebuild-test",
+  "version": "1.0.0",
+  "description": "",
+  "license": "MIT",
+  "author": "take-ana",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}
