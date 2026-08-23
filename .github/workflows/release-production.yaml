@@ -13,6 +13,9 @@ concurrency:
   group: production-deployment
   cancel-in-progress: false
 
+env:
+  DOCKERFILE_PATH: ./app/docker/Dockerfile
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -50,7 +53,7 @@ jobs:
           REPOSITORY="${{ vars.ECR_REPOSITORY_NAME }}"
           VERSION_IMAGE="${REGISTRY}/${REPOSITORY}:${GITHUB_REF_NAME}"
           SHA_IMAGE="${REGISTRY}/${REPOSITORY}:sha-${GITHUB_SHA}"
-          docker build -t "$VERSION_IMAGE" -t "$SHA_IMAGE" .
+          docker build -t "$VERSION_IMAGE" -t "$SHA_IMAGE" -f "$DOCKERFILE_PATH"
           docker push "$VERSION_IMAGE"
           docker push "$SHA_IMAGE"
           DIGEST="$(aws ecr describe-images \
