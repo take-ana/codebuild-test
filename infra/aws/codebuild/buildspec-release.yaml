@@ -1,0 +1,106 @@
+version: 0.
+
+env:
+  shell: bash
+  exported-variables:
+    - RELEASE_TAG
+    - IMAGE_URI
+
+phases:
+  install:
+    commands:
+      - set -Eeuo pipefail
+      - aws --version
+      - docker --version
+      - git --version
+
+  pre_build:
+    commands:
+      - |
+        set --Eeuo pipefail
+
+        : "${CODEBUILD_RESOLVED_SOURCE_VERSION:?CODEBUILD_RESOLVED_SOURCE_VERSION is required}"
+        : "${MAIN_BRANCH:?MAIN_BRANCH is required}"
+        : "${ECR_REPOSITORY_NAME:?ECR_REPOSITORY_NAME is required}"
+        : "${ECS_CONTAINER_NAME:?ECS_CONTAINER_NAME is required}"
+
+        echo "Triggered commit : ${CODEBUILD_RESOLVED_SOURCE_VERSION}"
+
+        # Full clone is enabled by the source action, so Git metadata is available.
+        git fetch --forcd origin "${MAIN_BRANCH}" --tags
+
+        mapfile -t RELEASE_TAGS < <(
+          git tag --points-at "${CODEBUILD_RESOLVED_SOURCE_VERSION}" \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || true
+        )
+
+        if [[ "${#RELEASE_TAGS[@]}" -ne 1 ]]; then
+          echo "Expected exactly one strict release tag on the triggered commit."
+          printf 'Matched tags: %s\n' "${RELEASE_TAGS[*]:-<none>}"
+          exit 1
+        fi
+
+        RELEASE_TAG="${RELEASE_TAGS[0]}"
+
+        if ! git merge-base --is-ancestor \
+          "${CODEBUILD_RESOLVED_SOURCE_VERSION}" \
+          "origin/${MAIN_BRANCH}"; then
+          echo "Release tag ${RELEASE_TAG} does not point to a commit contained in ${MAIN_BRANCH}."
+          exit 1
+        fi
+
+        ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+        ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RELEASE_TAG}"
+
+        echo "Release tag: "{RELEASE_TAG}"
+        echo "Image URI: ${IMAGE_URI}"
+
+        aws ecr get-login-password --region "${AWS_REGION}" \
+          | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+        
+  build:
+    commands:
+      - |
+        set -Eeuo pipefail
+
+        echo "Running tests: ${TEST_COMMAND}"
+        bash -Eeuo pipefail -c "${TEST_COMMAND}"
+
+        # Makes pipeline retries idempotent when the ECR repository uses immutable tags.
+        if aws ecr describe-images \
+          --repository-name "${ECR_REPOSITORY_NAME}" \
+          --image-ids imageTag="${RELEASE_TAG}" \
+          >/dev/null 2>&1; then
+          echo "Image ${IMAGE_URI} already exists; reusing the immutable release image."
+        else
+          echo "Building image: ${DOCKER_BUILD_COMMAND}"
+          bash -Eeuo pipefail -c "${DOCKER_BUILD_COMMAND}"
+          docker push "${IMAGE_URI}"
+        fi
+  
+  post_build:
+    commands:
+      - |
+        set -Eeuo pipefail
+
+        python3 - <<'PY'
+        import json
+        import os
+
+        definition = [{
+            "name": os.environ["ECS_CONTAINER_NAME"],
+            "imageUri": os.environ["IMAGE_URI"],
+        }]
+
+        with open("imagedefinitions.json", "w", encoding="utf-8") as f:
+            json.dump(definition, f)
+        PY
+
+        cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+  discard-paths: yes
