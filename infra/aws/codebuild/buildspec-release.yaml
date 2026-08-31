@@ -1,4 +1,4 @@
-version: 0.
+version: 0.2
 
 env:
   shell: bash
@@ -17,7 +17,7 @@ phases:
   pre_build:
     commands:
       - |
-        set --Eeuo pipefail
+        set -Eeuo pipefail
 
         : "${CODEBUILD_RESOLVED_SOURCE_VERSION:?CODEBUILD_RESOLVED_SOURCE_VERSION is required}"
         : "${MAIN_BRANCH:?MAIN_BRANCH is required}"
@@ -27,7 +27,7 @@ phases:
         echo "Triggered commit : ${CODEBUILD_RESOLVED_SOURCE_VERSION}"
 
         # Full clone is enabled by the source action, so Git metadata is available.
-        git fetch --forcd origin "${MAIN_BRANCH}" --tags
+        git fetch --force origin "${MAIN_BRANCH}" --tags
 
         mapfile -t RELEASE_TAGS < <(
           git tag --points-at "${CODEBUILD_RESOLVED_SOURCE_VERSION}" \
@@ -54,7 +54,7 @@ phases:
         ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY_NAME}:${RELEASE_TAG}"
 
-        echo "Release tag: "{RELEASE_TAG}"
+        echo "Release tag: ${RELEASE_TAG}"
         echo "Image URI: ${IMAGE_URI}"
 
         aws ecr get-login-password --region "${AWS_REGION}" \
