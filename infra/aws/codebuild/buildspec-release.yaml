@@ -2,7 +2,7 @@ version: 0.2
 
 env:
   shell: bash
-  git-credential-helpers: yes
+  git-credential-helper: yes
   exported-variables:
     - RELEASE_TAG
     - IMAGE_URI
